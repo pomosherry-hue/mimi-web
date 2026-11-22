@@ -6,6 +6,10 @@
 
 **https://pomosherry-hue.github.io/mimi-web/**
 
+扫码打开：
+
+<img src="qr.png" alt="咪咪色彩英语 网址二维码" width="240">
+
 `qr.png` 就是这个网址的二维码，可以直接印出来或发到微信。
 
 ## 预览说明

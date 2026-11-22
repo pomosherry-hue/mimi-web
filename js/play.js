@@ -155,7 +155,7 @@
     } else if (ep.series === 'wanzhuan-secai') {
       errBox.innerHTML = '<b>预览版：视频暂未接入</b>这一课的备用地址暂时打不开。请稍后再试，或先看其他课。';
     } else {
-      errBox.innerHTML = '<b>预览版：视频暂未接入</b>咪咪色彩英语的动画还在云存储里，这个预览网站暂时播不了。玩转色彩的课程请回目录打开，一般可以直接看。';
+      errBox.innerHTML = '<b>这一集暂时打不开</b>请稍后再试，或先看其他集。';
     }
     errBox.hidden = false;
   }

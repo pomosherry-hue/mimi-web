@@ -33,7 +33,15 @@
     publicIndex = {};
     var catalog = w.MIMI_CATALOG;
     if (!catalog) return publicIndex;
+    var previewBase = ((cfg().PREVIEW_MEDIA_BASE) || '').replace(/\/?$/, '/');
     (catalog.episodes || []).forEach(function (ep) {
+      if (ep.series === 'mimi-songs') {
+        var keys = [ep.video, ep.videoWide, ep.cover, ep.poster];
+        (ep.words || []).forEach(function (w) { if (w && w.image) keys.push(w.image); });
+        keys.forEach(function (rel) {
+          if (rel) publicIndex[rel] = previewBase + String(rel).replace(/^\//, '');
+        });
+      }
       if (ep.series === 'wanzhuan-secai') {
         var n = String(ep.no).padStart(2, '0');
         var base = 'https://pomosherry-hue.github.io/kids-color/lesson-' + n;

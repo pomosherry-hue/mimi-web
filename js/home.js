@@ -118,9 +118,4 @@
     console.warn('media resolve failed', err);
   });
 
-  var tip = document.getElementById('cloud-tip');
-  if (tip && M.isPreviewHost && M.isPreviewHost()) {
-    tip.hidden = false;
-    tip.innerHTML = '这是预览站。玩转色彩的课程可以打开观看。咪咪色彩英语的视频还没有接到这个网站，点进去会看到「预览版：视频暂未接入」。';
-  }
 })();

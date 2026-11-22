@@ -34,14 +34,14 @@
     var catalog = w.MIMI_CATALOG;
     if (!catalog) return publicIndex;
     (catalog.episodes || []).forEach(function (ep) {
-      if (ep.release && ep.video) publicIndex[ep.video] = ep.release;
       if (ep.series === 'wanzhuan-secai') {
         var n = String(ep.no).padStart(2, '0');
         var base = 'https://pomosherry-hue.github.io/kids-color/lesson-' + n;
-        if (ep.cover && !publicIndex[ep.cover]) publicIndex[ep.cover] = base + '.jpg';
-        if (ep.poster && !publicIndex[ep.poster]) publicIndex[ep.poster] = base + '.jpg';
-        if (ep.video && !publicIndex[ep.video]) publicIndex[ep.video] = base + '.mp4';
+        if (ep.video) publicIndex[ep.video] = base + '.mp4';
+        if (ep.cover) publicIndex[ep.cover] = base + '.jpg';
+        if (ep.poster) publicIndex[ep.poster] = base + '.jpg';
       }
+      if (ep.release && ep.video && !publicIndex[ep.video]) publicIndex[ep.video] = ep.release;
     });
     return publicIndex;
   }

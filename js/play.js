@@ -36,7 +36,6 @@
   var words = ep.words || [];
   var lyrics = ep.lyrics || [];
   var useWide = false;
-  var triedRelease = false;
   var titleZh = M.zhTitle(ep);
   var titleEn = M.enTitle(ep);
   var color = M.colorName(ep);
@@ -70,7 +69,8 @@
   });
 
   function renderPage() {
-  var poster = M.mediaUrl(ep.poster || ep.cover);
+  var posterPath = ep.poster || ep.cover || '';
+  var poster = posterPath ? M.mediaUrl(posterPath) : '';
   var src = M.videoOf(ep, false);
 
   var wordsHtml = '';
@@ -79,10 +79,13 @@
     wordsHtml += '<div class="now-word wait" id="now-word">播放到单词时，这里会出现单词卡</div>';
     wordsHtml += '<div class="words" id="words">';
     words.forEach(function (w, i) {
-      var img = w.image ? M.mediaUrl(w.image) : '';
+      var imgPath = w.image || '';
+      var img = imgPath ? M.mediaUrl(imgPath) : '';
+      var imgFb = (imgPath && M.fallbackUrl) ? M.fallbackUrl(imgPath) : '';
       wordsHtml +=
         '<button type="button" class="word-card" data-i="' + i + '">' +
-          (img ? '<img alt="" src="' + img + '" onerror="this.style.visibility=\'hidden\'">' : '') +
+          (img ? '<img alt="" src="' + img + '" data-media="' + escapeHtml(imgPath) + '"' +
+            (imgFb && imgFb !== img ? ' data-fb="' + imgFb + '"' : '') + '>' : '') +
           '<div class="en">' + escapeHtml(w.en) + '</div>' +
           '<div class="zh">' + escapeHtml(w.zh || '') + '</div>' +
           (w.ipa ? '<div class="ipa">' + escapeHtml(w.ipa) + '</div>' : '<div class="ipa"></div>') +
@@ -131,7 +134,6 @@
     '</header>' +
     '<div class="player-wrap ' + (isLand ? 'land' : 'portrait') + '" id="player-wrap">' +
       '<video id="player" controls playsinline preload="metadata"' +
-        (poster ? ' poster="' + poster + '"' : '') +
         (src ? ' src="' + src + '"' : '') +
       '></video>' +
     '</div>' +
@@ -174,27 +176,76 @@
     if (errBox) errBox.hidden = true;
   }
 
-  if (video) {
-    video.addEventListener('error', function () {
-      var pages = M.kidsColorVideo ? M.kidsColorVideo(ep) : '';
-      if (!triedRelease && ep.release && video.currentSrc.indexOf(ep.release) === -1) {
-        triedRelease = true;
-        showError(true);
-        video.src = ep.release;
-        video.load();
-        video.play().catch(function () {});
-        return;
+  var tried = {};
+  var stallTimer = null;
+
+  function clearStall() {
+    if (stallTimer) {
+      clearTimeout(stallTimer);
+      stallTimer = null;
+    }
+  }
+
+  function armStall() {
+    clearStall();
+    if (!video) return;
+    var ms = (M.stallMs && M.stallMs()) || 6000;
+    stallTimer = setTimeout(function () {
+      stallTimer = null;
+      if (!video) return;
+      if (video.readyState >= 2) return;
+      tryFallback();
+    }, ms);
+  }
+
+  function tryFallback() {
+    if (!video) return;
+    var cur = video.currentSrc || video.getAttribute('src') || '';
+    if (cur) tried[cur] = true;
+    var list = (M.videoFallbacks && M.videoFallbacks(ep, useWide)) || [];
+    var next = '';
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && !tried[list[i]]) {
+        next = list[i];
+        break;
       }
-      if (pages && video.currentSrc.indexOf('/kids-color/lesson-') === -1) {
-        showError(true);
-        video.src = pages;
-        video.load();
-        video.play().catch(function () {});
-        return;
-      }
+    }
+    if (!next) {
       showPreviewNote();
+      return;
+    }
+    showError(true);
+    var t = video.currentTime || 0;
+    tried[next] = true;
+    video.src = next;
+    video.load();
+    armStall();
+    var onMeta = function () {
+      video.removeEventListener('loadedmetadata', onMeta);
+      if (t) {
+        try { video.currentTime = t; } catch (e) {}
+      }
+      video.play().catch(function () {});
+    };
+    video.addEventListener('loadedmetadata', onMeta);
+  }
+
+  if (posterPath && M.setVideoPoster) M.setVideoPoster(video, posterPath);
+  document.querySelectorAll('img[data-media]').forEach(function (img) {
+    if (M.watchMedia) M.watchMedia(img, img.getAttribute('data-media'));
+  });
+
+  if (video) {
+    if (src) tried[src] = true;
+    armStall();
+    video.addEventListener('error', tryFallback);
+    video.addEventListener('waiting', armStall);
+    video.addEventListener('stalled', armStall);
+    video.addEventListener('canplay', clearStall);
+    video.addEventListener('playing', function () {
+      clearStall();
+      hideError();
     });
-    video.addEventListener('playing', hideError);
   }
 
   if (wideBtnEl && video) {
@@ -206,7 +257,12 @@
       wrap.classList.toggle('portrait', !(useWide || isLand));
       var t = video.currentTime || 0;
       var paused = video.paused;
-      video.src = M.videoOf(ep, useWide);
+      tried = {};
+      clearStall();
+      var nextSrc = M.videoOf(ep, useWide);
+      if (nextSrc) tried[nextSrc] = true;
+      video.src = nextSrc;
+      armStall();
       video.addEventListener('loadedmetadata', function once() {
         video.removeEventListener('loadedmetadata', once);
         video.currentTime = t;
@@ -235,14 +291,19 @@
       return;
     }
     var w = words[i];
-    var img = w.image ? M.mediaUrl(w.image) : '';
+    var imgPath = w.image || '';
+    var img = imgPath ? M.mediaUrl(imgPath) : '';
+    var imgFb = (imgPath && M.fallbackUrl) ? M.fallbackUrl(imgPath) : '';
     nowEl.className = 'now-word';
     nowEl.innerHTML =
-      (img ? '<img alt="" src="' + img + '" onerror="this.style.visibility=\'hidden\'">' : '') +
+      (img ? '<img alt="" src="' + img + '" data-media="' + escapeHtml(imgPath) + '"' +
+        (imgFb && imgFb !== img ? ' data-fb="' + imgFb + '"' : '') + '>' : '') +
       '<div><div class="nw-en">' + escapeHtml(w.en) + '</div>' +
       '<div class="nw-zh">' + escapeHtml(w.zh || '') + '</div>' +
       (w.ipa ? '<div class="nw-ipa">' + escapeHtml(w.ipa) + '</div>' : '') +
       '</div>';
+    var nowImg = nowEl.querySelector('img[data-media]');
+    if (nowImg && M.watchMedia) M.watchMedia(nowImg, nowImg.getAttribute('data-media'));
   }
 
   var lastWord = -2;

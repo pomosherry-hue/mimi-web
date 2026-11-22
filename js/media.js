@@ -1,7 +1,5 @@
 (function (w) {
   var cache = {}; // path -> { url, exp }
-  var loginPromise = null;
-  var app = null;
 
   function cfg() {
     return w.MIMI_CONFIG || {};
@@ -20,11 +18,40 @@
     return false;
   }
 
+  // webmedia 保留但不再调用。
   function cloudAllowed() {
-    if (isOffline()) return false;
-    if (!cfg().CLOUD_ENV) return false;
-    if (isPreviewHost()) return false;
-    return true;
+    return false;
+  }
+
+  function withSlash(u) {
+    if (!u) return '';
+    return String(u).replace(/\/?$/, '/');
+  }
+
+  function mediaBase() {
+    return withSlash(cfg().MEDIA_BASE || '');
+  }
+
+  function previewBase() {
+    return withSlash(cfg().PREVIEW_MEDIA_BASE || '');
+  }
+
+  function kidsColorBase() {
+    return withSlash(cfg().KIDS_COLOR_BASE || 'https://pomosherry-hue.github.io/kids-color/');
+  }
+
+  function stallMs() {
+    var n = Number(cfg().MEDIA_STALL_MS);
+    return n > 0 ? n : 6000;
+  }
+
+  function cleanPath(path) {
+    return String(path || '').replace(/^\//, '');
+  }
+
+  function kidsColorFile(no, ext) {
+    var n = String(no).padStart(2, '0');
+    return kidsColorBase() + 'lesson-' + n + ext;
   }
 
   var publicIndex = null;
@@ -33,21 +60,20 @@
     publicIndex = {};
     var catalog = w.MIMI_CATALOG;
     if (!catalog) return publicIndex;
-    var previewBase = ((cfg().PREVIEW_MEDIA_BASE) || '').replace(/\/?$/, '/');
+    var base = previewBase();
     (catalog.episodes || []).forEach(function (ep) {
       if (ep.series === 'mimi-songs') {
         var keys = [ep.video, ep.videoWide, ep.cover, ep.poster];
-        (ep.words || []).forEach(function (w) { if (w && w.image) keys.push(w.image); });
+        (ep.words || []).forEach(function (wd) { if (wd && wd.image) keys.push(wd.image); });
         keys.forEach(function (rel) {
-          if (rel) publicIndex[rel] = previewBase + String(rel).replace(/^\//, '');
+          if (rel && base) publicIndex[rel] = base + String(rel).replace(/^\//, '');
         });
       }
       if (ep.series === 'wanzhuan-secai') {
-        var n = String(ep.no).padStart(2, '0');
-        var base = 'https://pomosherry-hue.github.io/kids-color/lesson-' + n;
-        if (ep.video) publicIndex[ep.video] = base + '.mp4';
-        if (ep.cover) publicIndex[ep.cover] = base + '.jpg';
-        if (ep.poster) publicIndex[ep.poster] = base + '.jpg';
+        var file = kidsColorFile(ep.no, '');
+        if (ep.video) publicIndex[ep.video] = file + '.mp4';
+        if (ep.cover) publicIndex[ep.cover] = file + '.jpg';
+        if (ep.poster) publicIndex[ep.poster] = file + '.jpg';
       }
       if (ep.release && ep.video && !publicIndex[ep.video]) publicIndex[ep.video] = ep.release;
     });
@@ -56,32 +82,39 @@
 
   function publicUrl(path) {
     if (!path) return '';
-    var p = String(path).replace(/^\//, '');
-    return getPublicIndex()[p] || '';
+    var p = cleanPath(path);
+    var mapped = getPublicIndex()[p];
+    if (mapped) return mapped;
+    // 未入目录的游戏图等，仍可回退到本站备份
+    var base = previewBase();
+    return base ? base + p : '';
+  }
+
+  function cloudUrl(path) {
+    if (!path || isOffline()) return '';
+    var base = mediaBase();
+    if (!base || base === '/') return '';
+    return base + cleanPath(path);
+  }
+
+  function fallbackUrl(path) {
+    return publicUrl(path);
   }
 
   function kidsColorVideo(ep) {
     if (!ep || ep.series !== 'wanzhuan-secai') return '';
-    var n = String(ep.no).padStart(2, '0');
-    return 'https://pomosherry-hue.github.io/kids-color/lesson-' + n + '.mp4';
-  }
-
-  function applyPublic(list) {
-    var exp = Date.now() + 24 * 3600 * 1000;
-    (list || []).forEach(function (p) {
-      if (cache[p] && cache[p].url) return;
-      var u = publicUrl(p);
-      if (u) cache[p] = { url: u, exp: exp };
-    });
+    return kidsColorFile(ep.no, '.mp4');
   }
 
   function mediaUrl(path) {
     if (!path) return '';
-    var p = String(path).replace(/^\//, '');
+    var p = cleanPath(path);
     if (isOffline()) return 'media/' + p;
     var c = cache[p];
     if (c && c.url && c.exp > Date.now()) return c.url;
     if (c && c.url) return c.url;
+    var cloud = cloudUrl(p);
+    if (cloud) return cloud;
     return publicUrl(p);
   }
 
@@ -97,108 +130,103 @@
     return kidsColorVideo(ep);
   }
 
-  function ensureLogin() {
-    if (loginPromise) return loginPromise;
-    loginPromise = Promise.resolve().then(function () {
-      if (typeof w.cloudbase !== 'function' && typeof w.cloudbase !== 'object') {
-        throw new Error('cloudbase-sdk');
-      }
-      var env = cfg().CLOUD_ENV;
-      if (!env) throw new Error('no-env');
-      app = w.cloudbase.init({ env: env, region: 'ap-shanghai' });
-      var auth = app.auth({ persistence: 'local' });
-      if (auth.hasLoginState && auth.hasLoginState()) return app;
-      if (typeof auth.signInAnonymously === 'function') {
-        return Promise.resolve(auth.signInAnonymously()).then(function () { return app; });
-      }
-      if (auth.anonymousAuthProvider) {
-        return auth.anonymousAuthProvider().signIn().then(function () { return app; });
-      }
-      throw new Error('anonymous-api');
-    }).catch(function (err) {
-      loginPromise = null;
-      throw err;
-    });
-    return loginPromise;
+  function videoFallbacks(ep, wide) {
+    if (!ep) return [];
+    var path = (wide && ep.videoWide) ? ep.videoWide : ep.video;
+    var urls = [];
+    function add(u) {
+      if (u && urls.indexOf(u) === -1) urls.push(u);
+    }
+    add(publicUrl(path));
+    add(ep.release);
+    add(kidsColorVideo(ep));
+    var primary = videoOf(ep, wide);
+    return urls.filter(function (u) { return u && u !== primary; });
   }
 
-  function callWebmedia(paths) {
-    return ensureLogin().then(function (sdk) {
-      return sdk.callFunction({
-        name: cfg().WEBMEDIA_FN || 'webmedia',
-        data: { paths: paths }
-      });
-    }).then(function (res) {
-      var result = (res && (res.result || res.data)) || {};
-      if (result.body && typeof result.body === 'string') {
-        try { result = JSON.parse(result.body); } catch (e) {}
-      }
-      if (!result.ok) {
-        var err = new Error(result.reason || 'webmedia-failed');
-        err.reason = result.reason;
-        throw err;
-      }
-      return result;
+  function onImgError(el) {
+    if (!el) return;
+    if (el.getAttribute('data-fb-tried') === '1') {
+      if (el.getAttribute('data-fb-remove') === '1' && el.parentNode) el.remove();
+      else el.style.visibility = 'hidden';
+      return;
+    }
+    el.setAttribute('data-fb-tried', '1');
+    var fb = el.getAttribute('data-fb') || '';
+    if (!fb) fb = fallbackUrl(el.getAttribute('data-media') || '');
+    var cur = el.currentSrc || el.getAttribute('src') || '';
+    if (fb && fb !== cur) {
+      el.src = fb;
+      return;
+    }
+    if (el.getAttribute('data-fb-remove') === '1' && el.parentNode) el.remove();
+    else el.style.visibility = 'hidden';
+  }
+
+  function watchMedia(el, path, opts) {
+    if (!el) return;
+    opts = opts || {};
+    var p = path || el.getAttribute('data-media') || '';
+    var primary = p ? mediaUrl(p) : (el.getAttribute('src') || '');
+    var fb = (p ? fallbackUrl(p) : '') || el.getAttribute('data-fb') || '';
+    if (p) el.setAttribute('data-media', p);
+    if (fb && fb !== primary) el.setAttribute('data-fb', fb);
+    if (opts.removeOnFail) el.setAttribute('data-fb-remove', '1');
+    if (primary && el.getAttribute('src') !== primary && el.currentSrc !== primary) {
+      if (!el.getAttribute('src')) el.src = primary;
+    }
+    if (el.getAttribute('data-fb-bound') !== '1') {
+      el.setAttribute('data-fb-bound', '1');
+      el.addEventListener('error', function () { onImgError(el); });
+    }
+    if (el.complete && el.naturalWidth > 0) return;
+    var timer = setTimeout(function () {
+      if (el.complete && el.naturalWidth > 0) return;
+      onImgError(el);
+    }, stallMs());
+    el.addEventListener('load', function onload() {
+      el.removeEventListener('load', onload);
+      clearTimeout(timer);
     });
   }
 
-  function withTimeout(promise, ms) {
-    return new Promise(function (resolve, reject) {
-      var done = false;
-      var timer = setTimeout(function () {
-        if (done) return;
-        done = true;
-        reject(new Error('timeout'));
-      }, ms);
-      promise.then(function (v) {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        resolve(v);
-      }, function (err) {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        reject(err);
-      });
-    });
+  function setVideoPoster(video, path) {
+    if (!video || !path) return;
+    var primary = mediaUrl(path);
+    var fb = fallbackUrl(path);
+    if (primary) video.setAttribute('poster', primary);
+    if (!fb || fb === primary) return;
+    var im = new Image();
+    var done = false;
+    var timer = setTimeout(function () {
+      if (done) return;
+      done = true;
+      video.setAttribute('poster', fb);
+    }, stallMs());
+    im.onload = function () {
+      done = true;
+      clearTimeout(timer);
+    };
+    im.onerror = function () {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      video.setAttribute('poster', fb);
+    };
+    im.src = primary;
   }
 
   function resolve(paths) {
-    var list = Array.from(new Set((paths || []).filter(Boolean).map(function (p) {
-      return String(p).replace(/^\//, '');
-    })));
+    var list = Array.from(new Set((paths || []).filter(Boolean).map(cleanPath)));
     if (isOffline()) {
       var off = {};
       list.forEach(function (p) { off[p] = 'media/' + p; });
       return Promise.resolve(off);
     }
-    applyPublic(list);
-    var now = Date.now();
-    var need = list.filter(function (p) { return !(cache[p] && cache[p].url && cache[p].exp > now); });
-    var done = Promise.resolve();
-    if (need.length && cloudAllowed()) {
-      var chunks = [];
-      for (var i = 0; i < need.length; i += 50) chunks.push(need.slice(i, i + 50));
-      done = withTimeout(Promise.all(chunks.map(callWebmedia)), 3000).then(function (parts) {
-        var maxAge = 7200;
-        parts.forEach(function (part) {
-          if (part.maxAge) maxAge = part.maxAge;
-          var exp = Date.now() + Math.max(60, (maxAge - 120)) * 1000;
-          Object.keys(part.urls || {}).forEach(function (p) {
-            cache[p] = { url: part.urls[p], exp: exp };
-          });
-        });
-      }).catch(function (err) {
-        console.warn('webmedia skipped or failed', err && err.message ? err.message : err);
-        applyPublic(need);
-      });
-    }
-    return done.then(function () {
-      var out = {};
-      list.forEach(function (p) { out[p] = mediaUrl(p); });
-      return out;
-    });
+    getPublicIndex();
+    var out = {};
+    list.forEach(function (p) { out[p] = mediaUrl(p); });
+    return Promise.resolve(out);
   }
 
   function seriesCopy(series) {
@@ -296,13 +324,20 @@
 
   w.MIMI = {
     mediaUrl: mediaUrl,
+    cloudUrl: cloudUrl,
+    fallbackUrl: fallbackUrl,
     videoOf: videoOf,
+    videoFallbacks: videoFallbacks,
     resolve: resolve,
     isOffline: isOffline,
     isPreviewHost: isPreviewHost,
     cloudAllowed: cloudAllowed,
     kidsColorVideo: kidsColorVideo,
     publicUrl: publicUrl,
+    onImgError: onImgError,
+    watchMedia: watchMedia,
+    setVideoPoster: setVideoPoster,
+    stallMs: stallMs,
     seriesCopy: seriesCopy,
     zhTitle: zhTitle,
     enTitle: enTitle,

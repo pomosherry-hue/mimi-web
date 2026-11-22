@@ -63,7 +63,7 @@
     if (color && ep.series === 'mimi-songs') label += ' · ' + color;
     var dur = ep.duration ? M.fmtDuration(ep.duration) : '';
     var img = cover
-      ? '<img alt="" data-media="' + cover + '" onerror="this.remove()">'
+      ? '<img alt="" data-media="' + cover + '"'
       : '';
     var enHtml = (en && en !== title) ? '<p class="en-sub">' + escapeHtml(en) + '</p>' : '';
     return (
@@ -111,8 +111,10 @@
   if (!paths.length) return;
   M.resolve(paths).then(function () {
     imgs.forEach(function (img) {
-      var u = M.mediaUrl(img.getAttribute('data-media'));
+      var path = img.getAttribute('data-media');
+      var u = M.mediaUrl(path);
       if (u) img.src = u;
+      if (M.watchMedia) M.watchMedia(img, path, { removeOnFail: true });
     });
   }).catch(function (err) {
     console.warn('media resolve failed', err);
